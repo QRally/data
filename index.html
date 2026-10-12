@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Live Recce Pace Logger v1.3</title>
+  <title>Live Recce Pace Logger v1.4</title>
   <style>
     :root {
       --bg-color: #0d0d11;
@@ -159,7 +159,7 @@
     .btn-full:hover { background: #323242; border-color: var(--accent-green); }
   </style>
 </head>
-<body>
+<body tabindex="0">
 
   <header>
     <div class="stat-box">
@@ -213,42 +213,87 @@
     const wakelockStatus = document.getElementById('wakelock-status');
     const noteCount = document.getElementById('note-count');
 
+    // Ensure document body has focus for keyboard remote events
+    window.addEventListener('DOMContentLoaded', () => {
+      document.body.focus();
+    });
+    window.addEventListener('click', () => {
+      document.body.focus();
+    });
+
+    // Wake Lock API Resiliency (Only called on user action)
     async function requestWakeLock() {
-      try {
-        if ('wakeLock' in navigator) {
+      if ('wakeLock' in navigator && !wakeLock) {
+        try {
           wakeLock = await navigator.wakeLock.request('screen');
           wakelockStatus.innerText = 'WAKE LOCK: ON';
           wakelockStatus.classList.add('active');
 
           wakeLock.addEventListener('release', () => {
+            wakeLock = null;
             wakelockStatus.innerText = 'WAKE LOCK: OFF';
             wakelockStatus.classList.remove('active');
           });
+        } catch (err) {
+          wakelockStatus.innerText = 'WAKE LOCK: FAILED';
+          console.warn('Wake Lock error:', err);
         }
-      } catch (err) {
-        wakelockStatus.innerText = 'WAKE LOCK: FAILED';
       }
     }
 
     document.addEventListener('visibilitychange', async () => {
-      if (wakeLock !== null && document.visibilityState === 'visible') {
+      if (wakeLock === null && document.visibilityState === 'visible' && isRecordingCorner) {
         await requestWakeLock();
       }
     });
 
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // Audio Context Resiliency
+    let audioCtx = null;
+    function getAudioContext() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      return audioCtx;
+    }
+
     function playBeep(freq, type, duration) {
-      if (audioCtx.state === 'suspended') audioCtx.resume();
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = type;
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + duration);
+      try {
+        const ctx = getAudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + duration);
+      } catch (err) {
+        console.warn('Audio playback error:', err);
+      }
+    }
+
+    // Hook into Media Session API for Bluetooth Remote triggers
+    if ('mediaSession' in navigator) {
+      try {
+        const handleMediaAction = () => { triggerAction(); };
+        navigator.mediaSession.setActionHandler('play', handleMediaAction);
+        navigator.mediaSession.setActionHandler('pause', handleMediaAction);
+        navigator.mediaSession.setActionHandler('previoustrack', handleMediaAction);
+        navigator.mediaSession.setActionHandler('nexttrack', handleMediaAction);
+
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: 'Live Recce Logger',
+          artist: 'RODGE Automotive',
+          album: 'Stage Notes Active'
+        });
+      } catch (err) {
+        console.log('Media Session not supported or blocked', err);
+      }
     }
 
     function startGPSWatch() {
@@ -286,10 +331,10 @@
       }
     }
 
-    // Core Trigger Action Logic (Shared by Screen Tap & Bluetooth Remote)
+    // Core Trigger Action Logic (Shared by Screen Tap, Keyboard, and Media Session)
     function triggerAction() {
-      if (audioCtx.state === 'suspended') audioCtx.resume();
-      if (!wakeLock) requestWakeLock();
+      getAudioContext();
+      requestWakeLock();
 
       if (!isRecordingCorner) {
         isRecordingCorner = true;
@@ -310,16 +355,33 @@
     }
 
     // Screen Tap Listener
-    actionBtn.addEventListener('click', triggerAction);
+    actionBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      triggerAction();
+    });
 
-    // Bluetooth Camera Shutter / Keyboard Listener (Spacebar, Enter, or any button click from remote)
-    window.addEventListener('keydown', (e) => {
-      // Most BT camera shutters send Spacebar, Enter, or Page keys
-      if (e.code === 'Space' || e.code === 'Enter' || e.key === ' ' || e.key === 'Enter') {
+    // Robust Keyboard & Media Remote Listener (Listens to both keydown and keyup with fallbacks)
+    const handleKeyEvent = (e) => {
+      const isRemoteKey = 
+        e.code === 'Space' || 
+        e.code === 'Enter' || 
+        e.key === ' ' || 
+        e.key === 'Enter' || 
+        e.keyCode === 32 || 
+        e.keyCode === 13 ||
+        e.key === 'MediaPlayPause' ||
+        e.key === 'MediaTrackNext' ||
+        e.key === 'MediaTrackPrevious';
+
+      if (isRemoteKey) {
         e.preventDefault();
+        e.stopPropagation();
         triggerAction();
       }
-    });
+    };
+
+    window.addEventListener('keydown', handleKeyEvent);
+    window.addEventListener('keyup', handleKeyEvent);
 
     function processCapturedCorner(points) {
       if (points.length < 3) {
@@ -448,42 +510,7 @@
       link.click();
       document.body.removeChild(link);
     });
-// Hook into Media Session API to catch Bluetooth remote media triggers
-if ('mediaSession' in navigator) {
-  try {
-    navigator.mediaSession.setActionHandler('play', () => { triggerAction(); });
-    navigator.mediaSession.setActionHandler('pause', () => { triggerAction(); });
-    navigator.mediaSession.setActionHandler('previoustrack', () => { triggerAction(); });
-    navigator.mediaSession.setActionHandler('nexttrack', () => { triggerAction(); });
-    
-    // Set active metadata so the browser keeps the media session alive
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: 'Live Recce Logger',
-      artist: 'RODGE Automotive',
-      album: 'Stage Notes Active'
-    });
-  } catch (err) {
-    console.log('Media Session not supported or blocked');
-  }
-// Hook into Media Session API to catch Bluetooth remote media triggers
-if ('mediaSession' in navigator) {
-  try {
-    navigator.mediaSession.setActionHandler('play', () => { triggerAction(); });
-    navigator.mediaSession.setActionHandler('pause', () => { triggerAction(); });
-    navigator.mediaSession.setActionHandler('previoustrack', () => { triggerAction(); });
-    navigator.mediaSession.setActionHandler('nexttrack', () => { triggerAction(); });
-    
-    // Set active metadata so the browser keeps the media session alive
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: 'Live Recce Logger',
-      artist: 'RODGE Automotive',
-      album: 'Stage Notes Active'
-    });
-  } catch (err) {
-    console.log('Media Session not supported or blocked');
-  }
-}
-}
+
     startGPSWatch();
   </script>
 </body>
