@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Live Recce Pace Logger v1.4</title>
+  <title>Live Recce Pace Logger v1.5</title>
   <style>
     :root {
       --bg-color: #0d0d11;
@@ -195,6 +195,9 @@
   </footer>
 
   <script>
+    // CONFIG: Choose your calibration profile ('easywrite' or 'standard')
+    const CALIBRATION_PROFILE = 'easywrite'; 
+
     let wakeLock = null;
     let isRecordingCorner = false;
     let currentCornerPoints = [];
@@ -214,14 +217,10 @@
     const noteCount = document.getElementById('note-count');
 
     // Ensure document body has focus for keyboard remote events
-    window.addEventListener('DOMContentLoaded', () => {
-      document.body.focus();
-    });
-    window.addEventListener('click', () => {
-      document.body.focus();
-    });
+    window.addEventListener('DOMContentLoaded', () => { document.body.focus(); });
+    window.addEventListener('click', () => { document.body.focus(); });
 
-    // Wake Lock API Resiliency (Only called on user action)
+    // Wake Lock API Resiliency
     async function requestWakeLock() {
       if ('wakeLock' in navigator && !wakeLock) {
         try {
@@ -236,7 +235,6 @@
           });
         } catch (err) {
           wakelockStatus.innerText = 'WAKE LOCK: FAILED';
-          console.warn('Wake Lock error:', err);
         }
       }
     }
@@ -331,7 +329,6 @@
       }
     }
 
-    // Core Trigger Action Logic (Shared by Screen Tap, Keyboard, and Media Session)
     function triggerAction() {
       getAudioContext();
       requestWakeLock();
@@ -354,24 +351,17 @@
       }
     }
 
-    // Screen Tap Listener
     actionBtn.addEventListener('click', (e) => {
       e.preventDefault();
       triggerAction();
     });
 
-    // Robust Keyboard & Media Remote Listener (Listens to both keydown and keyup with fallbacks)
     const handleKeyEvent = (e) => {
       const isRemoteKey = 
-        e.code === 'Space' || 
-        e.code === 'Enter' || 
-        e.key === ' ' || 
-        e.key === 'Enter' || 
-        e.keyCode === 32 || 
-        e.keyCode === 13 ||
-        e.key === 'MediaPlayPause' ||
-        e.key === 'MediaTrackNext' ||
-        e.key === 'MediaTrackPrevious';
+        e.code === 'Space' || e.code === 'Enter' || 
+        e.key === ' ' || e.key === 'Enter' || 
+        e.keyCode === 32 || e.keyCode === 13 ||
+        e.key === 'MediaPlayPause' || e.key === 'MediaTrackNext' || e.key === 'MediaTrackPrevious';
 
       if (isRemoteKey) {
         e.preventDefault();
@@ -424,13 +414,25 @@
 
       const dir = rCount >= lCount ? 'R' : 'L';
 
+      // Grading logic scaled based on selected profile
       let grade = 6;
-      if (minR < 18) grade = 1;
-      else if (minR < 35) grade = 2;
-      else if (minR < 60) grade = 3;
-      else if (minR < 90) grade = 4;
-      else if (minR < 130) grade = 5;
-      else grade = 6;
+      if (CALIBRATION_PROFILE === 'easywrite') {
+        // Tuned to mirror physical steering wheel lock angles (Easywrite equivalence)
+        if (minR < 15) grade = 1;
+        else if (minR < 30) grade = 2;
+        else if (minR < 55) grade = 3;
+        else if (minR < 85) grade = 4;
+        else if (minR < 120) grade = 5;
+        else grade = 6;
+      } else {
+        // Standard original profile
+        if (minR < 18) grade = 1;
+        else if (minR < 35) grade = 2;
+        else if (minR < 60) grade = 3;
+        else if (minR < 90) grade = 4;
+        else if (minR < 130) grade = 5;
+        else grade = 6;
+      }
 
       const totalCornerMeters = haversineDistance(points[0], points[points.length - 1]);
       totalStageDistance += totalCornerMeters;
